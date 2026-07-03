@@ -175,6 +175,11 @@ footer{padding:36px 6vw 60px;color:var(--cream-faint);font-size:11.5px;letter-sp
 .sw.on.lead{border-color:var(--pink);color:var(--pink);background:rgba(232,38,94,.07)}
 .modal-actions{display:flex;gap:10px;margin-top:6px}
 .modal-actions .btn-edit{flex:1;justify-content:center;padding:13px}
+.btn-ghost.pub{border-color:rgba(255,197,61,.5);color:var(--yellow)}
+.btn-ghost.pub:hover{border-color:var(--yellow);background:rgba(255,197,61,.08)}
+.steps{font-size:13px;color:var(--cream-dim);line-height:1.7;margin-bottom:18px}
+.steps b{color:var(--cream)}
+.steps a{color:var(--orange);font-weight:700}
 .toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(80px);background:var(--cream);color:#151412;
   font-weight:700;font-size:13px;padding:12px 24px;border-radius:99px;z-index:120;transition:transform .3s ease;box-shadow:0 8px 30px rgba(0,0,0,.4)}
 .toast.show{transform:translateX(-50%) translateY(0)}
@@ -209,7 +214,8 @@ footer{padding:36px 6vw 60px;color:var(--cream-faint);font-size:11.5px;letter-sp
   <span id="chips"></span>
   <input class="search" id="search" type="text" placeholder="Buscar pessoa, cargo ou marca…">
   <span class="edit-tools">
-    <button class="btn-ghost" id="btnDownload" title="Baixa o HTML já com suas alterações e com a mesma senha — é esse arquivo que você publica online">⬇ Baixar HTML</button>
+    <button class="btn-ghost pub" id="btnPublish" title="Salva suas alterações direto no site — atualiza pra todo mundo">🚀 Publicar no site</button>
+    <button class="btn-ghost" id="btnDownload" title="Baixa o HTML já com suas alterações e com a mesma senha">⬇ Baixar HTML</button>
     <button class="btn-ghost" id="btnReset">Restaurar original</button>
   </span>
   <span class="local-note" id="localNote">● alterações salvas neste navegador</span>
@@ -239,6 +245,25 @@ footer{padding:36px 6vw 60px;color:var(--cream-faint);font-size:11.5px;letter-sp
     <div class="modal-actions">
       <button class="btn-ghost" id="btnCancel">Cancelar</button>
       <button class="btn-edit" id="btnSave">Salvar</button>
+    </div>
+  </div>
+</div>
+<!-- MODAL TOKEN GITHUB -->
+<div class="overlay" id="pubOverlay">
+  <div class="modal">
+    <h4>Conectar ao GitHub</h4>
+    <div class="steps">
+      Configuração única pra publicar direto do site:<br>
+      <b>1.</b> Abre <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a><br>
+      <b>2.</b> Token name: <b>organograma</b> · Expiration: <b>1 ano</b> (custom)<br>
+      <b>3.</b> Repository access: <b>Only select repositories</b> → escolhe <b>organograma</b><br>
+      <b>4.</b> Permissions → Repository permissions → <b>Contents: Read and write</b><br>
+      <b>5.</b> <b>Generate token</b>, copia e cola aqui embaixo:
+    </div>
+    <div class="field"><label>Token</label><input id="fToken" type="password" placeholder="github_pat_…" autocomplete="off"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btnPubCancel">Cancelar</button>
+      <button class="btn-edit" id="btnPubSaveToken">Salvar e publicar</button>
     </div>
   </div>
 </div>
@@ -551,24 +576,70 @@ document.getElementById('btnReset').addEventListener('click',()=>{
   document.getElementById('localNote').classList.remove('show');
   render();toast("Original restaurado");
 });
-document.getElementById('btnDownload').addEventListener('click',async()=>{
+async function buildLockedHTML(){
   const clone=document.documentElement.cloneNode(true);
   clone.querySelector('#main').innerHTML="";
   clone.querySelector('#stats').innerHTML="";
   clone.querySelector('#chips').innerHTML="";
-  clone.querySelector('#overlay').classList.remove('open');
+  clone.querySelectorAll('.overlay').forEach(o=>o.classList.remove('open'));
+  clone.querySelector('#fToken').value="";
   clone.querySelector('body').classList.remove('edit');
   clone.querySelector('body').classList.add('locked');
   let payload;
   if(KEY){ const enc=await encryptText(KEY,JSON.stringify(DATA)); payload={salt:SALT_B64,iv:enc.iv,ct:enc.ct}; }
   else payload=DATA;
   clone.querySelector('#orgdata').textContent=JSON.stringify(payload);
-  const blob=new Blob(["<!DOCTYPE html>\n"+clone.outerHTML],{type:"text/html"});
+  return "<!DOCTYPE html>\n"+clone.outerHTML;
+}
+document.getElementById('btnDownload').addEventListener('click',async()=>{
+  const blob=new Blob([await buildLockedHTML()],{type:"text/html"});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
   a.download="organograma-publination-2026.html";
   a.click();
-  toast("HTML baixado com senha — é esse arquivo que você publica ✓");
+  toast("HTML baixado com senha ✓");
+});
+
+/* ---- publicar no GitHub ---- */
+const GH={owner:"giu-sin",repo:"organograma",files:["index.html","organograma.html"]};
+const TOKEN_KEY="publiGhToken";
+const pubOverlay=document.getElementById('pubOverlay');
+function bytesToB64(bytes){let bin="";const CH=0x8000;
+  for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH));
+  return btoa(bin);}
+async function publish(){
+  const tok=localStorage.getItem(TOKEN_KEY);
+  if(!tok){pubOverlay.classList.add('open');setTimeout(()=>document.getElementById('fToken').focus(),50);return;}
+  toast("Publicando…");
+  try{
+    const b64=bytesToB64(new TextEncoder().encode(await buildLockedHTML()));
+    const h={Authorization:"Bearer "+tok,Accept:"application/vnd.github+json"};
+    for(const path of GH.files){
+      const api=`https://api.github.com/repos/${GH.owner}/${GH.repo}/contents/${path}`;
+      const cur=await fetch(api,{headers:h}).then(r=>r.ok?r.json():null);
+      const body={message:"Atualização via site",content:b64};
+      if(cur&&cur.sha)body.sha=cur.sha;
+      const res=await fetch(api,{method:"PUT",headers:h,body:JSON.stringify(body)});
+      if(res.status===401||res.status===403){
+        localStorage.removeItem(TOKEN_KEY);
+        toast("Token inválido ou vencido — cola um novo");
+        pubOverlay.classList.add('open');return;
+      }
+      if(!res.ok)throw new Error(path+" → "+res.status);
+    }
+    toast("Publicado! O site atualiza em ~1 min pra todo mundo ✓");
+  }catch(e){toast("Erro ao publicar: "+e.message);}
+}
+document.getElementById('btnPublish').addEventListener('click',publish);
+document.getElementById('btnPubCancel').addEventListener('click',()=>pubOverlay.classList.remove('open'));
+pubOverlay.addEventListener('click',e=>{if(e.target===pubOverlay)pubOverlay.classList.remove('open')});
+document.getElementById('btnPubSaveToken').addEventListener('click',()=>{
+  const t=document.getElementById('fToken').value.trim();
+  if(!t){toast("Cola o token primeiro");return;}
+  localStorage.setItem(TOKEN_KEY,t);
+  document.getElementById('fToken').value="";
+  pubOverlay.classList.remove('open');
+  publish();
 });
 
 function toast(msg){
